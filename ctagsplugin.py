@@ -571,6 +571,148 @@ def show_tag_panel(view, result, jump_directly):
         else:
             view.window().show_quick_panel(display, on_select)
 
+#TDA- Add TagBar to CTags
+def create_pane(view):
+    """
+    #TODO: Don't create the pane if it exists
+    """
+    # RANGES
+    XMIN, YMIN, XMAX, YMAX = list(range(4))
+        # Code taken from the origami package
+    def get_layout():
+        layout = view.window().get_layout()
+        cells = layout['cells']
+        rows = layout['rows']
+        cols = layout['cols']
+        return rows, cols, cells
+
+    rows, cols, cells = get_layout()
+    current_group = view.window().active_group()
+    old_cell = cells.pop(current_group)
+    new_cell = []
+
+    def increment_if_greater_or_equal(x, threshold):
+        if x >= threshold:
+            return x+1
+        return x
+
+    def push_right_cells_after(cells, threshold):
+        return [[increment_if_greater_or_equal(x0, threshold),y0, increment_if_greater_or_equal(x1, threshold),y1] for (x0,y0,x1,y1) in cells]
+
+    # assume direction is right
+    cells = push_right_cells_after(cells, old_cell[XMAX])
+    cols.insert(old_cell[XMAX], (cols[old_cell[XMIN]] + cols[old_cell[XMAX]]) / 2)
+    new_cell = [old_cell[XMAX], old_cell[YMIN], old_cell[XMAX]+1, old_cell[YMAX]]
+    old_cell = [old_cell[XMIN], old_cell[YMIN], old_cell[XMAX], old_cell[YMAX]]
+    if new_cell:
+        focused_cell = old_cell
+        unfocused_cell = new_cell
+        cells.insert(current_group, focused_cell)
+        cells.append(unfocused_cell)
+        layout = {"cols": cols, "rows": rows, "cells": cells}
+        active_group = current_group
+        view.window().set_layout(layout)
+        return layout
+
+def show_tag_buffer(view, result, edit):
+    """
+    Display a persistent buffer for the tags
+    """
+    if result not in (True, False, None):
+        args, display = result
+        if not args:
+            return
+
+        #1. Create the pane
+        #2. Switch to that pane
+        #3. Create a new file there (returns a new view)
+        #4. Start to edit
+        layout = create_pane(view)
+        # change focus to the new cell/buffer
+        cell = len(layout['cells']) - 1
+        view.window().focus_group(cell)
+        new_view = view.window().new_file()
+        # Get just the file name without base and extension
+        file_name = os.path.splitext(os.path.basename(view.file_name()))[0]
+        s = {'tags': display, 'filename': file_name}
+        new_view.run_command('write_tags', s)
+        # cannot modify
+        new_view.set_read_only(True)
+        # Won't ask to save if its a scratch buffer
+        new_view.set_scratch(True)
+
+
+
+class WriteTags(sublime_plugin.TextCommand):
+    """write the tags to the given buffer"""
+    def run(self, edit, **args):
+        filename = args['filename'] + '_tags'
+        self.view.set_name(filename)
+        for tag in args['tags']:
+            tagstr = ', '.join(tag) + '\n'
+            self.view.insert(edit, self.view.size(), tagstr)
+
+class JumpToTag(sublime_plugin.EventListener):
+    """Check if the view is the current tags file"""
+
+    def on_text_command(self, view, command_name, args):
+        file_name = view.name()
+        if file_name not in [None, '']:
+            print(file_name)
+            if file_name.endswith('_tags'):
+            # One of our tag files
+                # get the cursor position
+                print("Executed text command on a tag file: %s" % file_name)
+                line = view.line(view.sel()[0])
+                x = view.substr(line)
+                print("x: %s" % x)
+                print("line: %s" % line)
+
+# Option 2: Just show the hierarchy, don't worry about the clicking
+def show_hierarchy(view, result, edit):
+    """
+    Display a the tagbar hierarchy for the file
+    """
+    if result not in (True, False, None):
+        args, display = result
+        if not args:
+            return
+
+        # for tag, arg in zip(display, args):
+        def group_classes(tags):
+            total_tags_class = []
+            for tag in tags:
+                print(tag)
+                if 'type' in tag and tag['type'] == 'c': # class
+                # build up the classes
+                    tag_class = {
+                            'class': tag['symbol'],
+                            'functions': [],
+                            'variables': []
+                            }
+                    # iterate through the tags again and check the classes
+                    for tag2 in tags:
+                        if 'class' in tag2 and tag2['class'] == tag_class['class']:
+                            if tag2['type'] in ['f', 'm']:
+                                tag_class['functions'].append(tag2['symbol'])
+                            elif tag2['type'] == 'v':
+                                tag_class['variables'].append(tag2['symbol'])
+                    total_tags_class.append(tag_class)
+            return total_tags_class
+
+        mytags = group_classes(args)
+
+        for tag in mytags:
+            print("%s : class" % tag['class'])
+            for function in tag['functions']:
+                print("\t%s : function" % function)
+            if len(tag['variables']) > 0:
+                print("\t[variables]")
+            for variable in tag['variables']:
+                print("\t%s" % variable)
+            print("")
+
+#ETDA
 
 def ctags_goto_command(jump_directly=False):
     """
@@ -589,6 +731,9 @@ def ctags_goto_command(jump_directly=False):
                 return
 
             result = func(self, self.view, args, tags_file)
+            #TDA: my implemented buffer for the tags
+            # show_tag_buffer(self.view, result, edit)
+            show_hierarchy(self.view, result, edit)
             show_tag_panel(self.view, result, jump_directly)
 
         return command
@@ -730,7 +875,7 @@ tags_cache = defaultdict(dict)
 
 class ShowSymbols(sublime_plugin.TextCommand):
     """
-    Provider for the ``show_symbols`` command.
+    Provider for the ``show_symbols`` command
 
     Command shows all symbols for the open file(s) or folder(s).
     """
